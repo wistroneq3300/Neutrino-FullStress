@@ -20,7 +20,10 @@ import re
 
 # Device logs shown embedded (collapsible). Everything else is linked.
 EMBED_LOGS = ("cpu.log", "dimm.log", "ssd.log",
-              "bf4_server.log", "bf4_client.log")
+              "bf4_server.log", "bf4_client.log",
+              "dmesg.log", "bmc_sel.log", "bmc_event.log")
+# Long, high-frequency samplers: linked, not embedded.
+LINK_LOGS = ("sensor.txt", "resource.log", "run.log")
 # Evidence files that are linked, not embedded (large / tabular).
 LINK_EXTS = (".txt", ".dat", ".log", ".json")
 
@@ -146,15 +149,15 @@ def _analyze_node(ndir):
         full = os.path.join(ndir, name)
         if not os.path.isfile(full):
             continue
-        if name in EMBED_LOGS:
+        if name in LINK_LOGS:
+            linked.append(name)
+        elif name in EMBED_LOGS:
             embedded.append(name)
         else:
             linked.append(name)
 
     findings = []
-    for name in embedded + [n for n in linked if n.endswith(".log") or n.endswith(".txt")]:
-        if name == "sensor.txt":
-            continue  # sensors are linked; too large to scrape per-line
+    for name in embedded:
         full = os.path.join(ndir, name)
         for ln, line in enumerate(_read(full).splitlines(), 1):
             if FINDING_RE.search(line):
@@ -168,6 +171,27 @@ def _analyze_node(ndir):
         sensor_ticks = _read(sensor_path).count("\n### ")
         if _read(sensor_path).startswith("### "):
             sensor_ticks += 1
+
+    # resource summary: peak memory % and peak load from resource.log
+    mem_peak = None
+    load_peak = None
+    res_path = os.path.join(ndir, "resource.log")
+    if os.path.isfile(res_path):
+        for line in _read(res_path).splitlines():
+            m = re.search(r"mem:\s*used=\d+MB\s*/\s*total=\d+MB\s*\(([\d.]+)%\)", line)
+            if m:
+                try:
+                    v = float(m.group(1))
+                    mem_peak = v if mem_peak is None else max(mem_peak, v)
+                except ValueError:
+                    pass
+            m = re.search(r"cpu:\s*load1=([\d.]+)", line)
+            if m:
+                try:
+                    v = float(m.group(1))
+                    load_peak = v if load_peak is None else max(load_peak, v)
+                except ValueError:
+                    pass
     return {
         "logs": logs,
         "embedded": embedded,
@@ -175,6 +199,8 @@ def _analyze_node(ndir):
         "findings": findings,
         "sensor_path": sensor_path if os.path.isfile(sensor_path) else None,
         "sensor_ticks": sensor_ticks,
+        "mem_peak": mem_peak,
+        "load_peak": load_peak,
     }
 
 
@@ -187,7 +213,8 @@ def build_report(run_dir, nodes):
         ndir = os.path.join(run_dir, tag)
         per_node[tag] = _analyze_node(ndir) if os.path.isdir(ndir) else \
             {"logs": [], "embedded": [], "linked": [], "findings": [],
-             "sensor_path": None, "sensor_ticks": 0}
+             "sensor_path": None, "sensor_ticks": 0,
+             "mem_peak": None, "load_peak": None}
 
     # ---- overview table -------------------------------------------------- #
     rows = []
@@ -197,16 +224,21 @@ def build_report(run_dir, nodes):
         nf = len(info["findings"])
         total_findings += nf
         status = "PASS" if nf == 0 else ("FAIL" if any(f[2] == "FAIL" for f in info["findings"]) else "WARN")
+        mp = info.get("mem_peak")
+        lp = info.get("load_peak")
+        mem_txt = f"{mp:.1f}%" if mp is not None else "-"
+        load_txt = f"{lp:.1f}" if lp is not None else "-"
         rows.append(
             f'<tr><td class="target"><a href="#node-{i}" data-panel="node-{i}">{_esc(tag)}</a>'
             f'<small>{_esc(os_ip)}</small></td>'
             f'<td>{_badge(status)}</td>'
-            f'<td>{len(info["embedded"])} device logs</td>'
-            f'<td>{info["sensor_ticks"]} sensor ticks</td>'
+            f'<td>{mem_txt}</td>'
+            f'<td>{load_txt}</td>'
+            f'<td>{info["sensor_ticks"]}</td>'
             f'<td>{nf}</td></tr>')
     overview_table = (
         '<div class="tablewrap"><table><thead><tr><th>Node</th><th>Status</th>'
-        '<th>Device logs</th><th>Sensor samples</th><th>Findings</th></tr></thead>'
+        '<th>Peak mem</th><th>Peak load</th><th>Sensor samples</th><th>Findings</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>')
 
     # ---- findings tab ---------------------------------------------------- #
@@ -253,10 +285,14 @@ def build_report(run_dir, nodes):
             links.append(f'<a class="filelink" href="{_esc(rel)}">{_esc(name)}</a>')
         links_html = "".join(links) or '<span class="muted">none</span>'
 
+        mp = info.get("mem_peak")
+        lp = info.get("load_peak")
         facts = (
             '<dl class="facts">'
             f'<div><dt>OS IP</dt><dd>{_esc(os_ip)}</dd></div>'
             f'<div><dt>BMC IP</dt><dd>{_esc(bmc_ip)}</dd></div>'
+            f'<div><dt>Peak memory</dt><dd>{("%.1f%%" % mp) if mp is not None else "-"}</dd></div>'
+            f'<div><dt>Peak load1</dt><dd>{("%.1f" % lp) if lp is not None else "-"}</dd></div>'
             f'<div><dt>Sensor samples</dt><dd>{info["sensor_ticks"]}</dd></div>'
             f'<div><dt>Findings</dt><dd>{nf}</dd></div>'
             '</dl>')

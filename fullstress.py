@@ -1111,6 +1111,47 @@ def print_event_report(post, ips):
     return total
 
 
+def capture_node_diag(ips, user, passwd, run_dir):
+    """After the run, write per-node dmesg + BMC SEL + EventLog into the
+    collected run dir so the HTML report can embed them.
+
+    - dmesg.log      : node kernel ring buffer (SSH, dmesg -T)
+    - bmc_sel.log    : BMC IPMI SEL (oob, ipmitool sel elist)
+    - bmc_event.log  : BMC Redfish EventLog
+    """
+    for ip in ips:
+        tag = ip.replace(".", "_")
+        ndir = os.path.join(run_dir, tag)
+        os.makedirs(ndir, exist_ok=True)
+
+        # node dmesg
+        dmesg = _ssh(ip, user, passwd, "dmesg -T 2>/dev/null || dmesg 2>/dev/null")
+        with open(os.path.join(ndir, "dmesg.log"), "w",
+                  encoding="utf-8", errors="replace") as f:
+            f.write(dmesg or "(no dmesg output)")
+
+        # BMC IPMI SEL
+        sel = sel_elist(ip)
+        with open(os.path.join(ndir, "bmc_sel.log"), "w",
+                  encoding="utf-8", errors="replace") as f:
+            f.write(sel or "(no SEL output)")
+
+        # BMC Redfish EventLog
+        ev_text = "(no redfish session)"
+        token, loc = redfish_login(ip)
+        if token:
+            try:
+                ev = redfish_entries(ip, token, "EventLog")
+                ev_text = json.dumps(ev, indent=1, ensure_ascii=False)
+            finally:
+                redfish_logout(ip, token, loc)
+        with open(os.path.join(ndir, "bmc_event.log"), "w",
+                  encoding="utf-8", errors="replace") as f:
+            f.write(ev_text)
+        n_dmesg = len((dmesg or "").splitlines())
+        print(f"  [{ip}] diag: dmesg {n_dmesg} lines, SEL+EventLog captured")
+
+
 def collect_node_logs(ips, user, passwd, stamp, run_dir):
     """scp each node's /root/fullstress_logs/<tag>/<stamp>/ back under run_dir."""
     os.makedirs(run_dir, exist_ok=True)
@@ -1196,6 +1237,8 @@ def main():
     print("\n[*] collecting node logs to the jumper ...")
     collect_node_logs(cfg["remote_ips"], cfg["ssh_user"], cfg["ssh_pass"],
                       stamp, run_dir)
+    print("[*] capturing per-node dmesg + BMC SEL/EventLog ...")
+    capture_node_diag(cfg["remote_ips"], cfg["ssh_user"], cfg["ssh_pass"], run_dir)
     nodes = [(ip.replace(".", "_"), ip, bmc_ip_for(ip) or "") for ip in cfg["remote_ips"]]
     try:
         import fs_report
