@@ -104,6 +104,7 @@ border-radius:6px;padding:10px 14px;margin:10px 0;overflow-wrap:anywhere}
 .snippet{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 0;padding:9px 11px;
 background:#f6f2ea;border:1px solid #e4dccb;border-radius:4px;color:#4a3d1a;max-height:220px;overflow:auto}
 .empty{padding:20px;background:#f1f7fa;color:var(--muted);border-radius:6px}
+.clean{padding:18px 20px;background:var(--ok-bg);color:#165b37;border-radius:6px;font-weight:600}
 .outcome{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:flex-start;padding:16px 18px;border:1px solid var(--line);border-radius:8px;background:#fbfdfe;margin-bottom:18px}.outcome h2{margin:0 0 6px}.outcome-badges .label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.facts{display:flex;gap:22px 38px;flex-wrap:wrap;margin:20px 0 0;padding-top:18px;border-top:1px solid var(--line)}
 .facts dt{font-size:13px;color:var(--muted)}.facts dd{margin:3px 0 0;font-weight:600;overflow-wrap:anywhere}
 .filelink{display:inline-block;margin:3px 10px 3px 0}
@@ -281,6 +282,20 @@ def _verdict_bmc(ndir):
     return "PASS"
 
 
+def _load_label(load, nproc):
+    """Plain-English hint so a peak-load number is readable at a glance."""
+    if load is None:
+        return ""
+    if nproc:
+        ratio = load / nproc
+        if ratio >= 1.0:
+            return " (\u2248 CPU saturated)"
+        if ratio >= 0.5:
+            return " (CPU busy)"
+        return " (CPU load low)"
+    return ""
+
+
 def _analyze_node(ndir):
     """Return per-node summary: log files, findings, sensor summary."""
     logs = sorted(os.listdir(ndir)) if os.path.isdir(ndir) else []
@@ -321,6 +336,7 @@ def _analyze_node(ndir):
     # resource summary: peak memory % and peak load from resource.log
     mem_peak = None
     load_peak = None
+    nproc = None
     res_path = os.path.join(ndir, "resource.log")
     if os.path.isfile(res_path):
         for line in _read(res_path).splitlines():
@@ -331,13 +347,15 @@ def _analyze_node(ndir):
                     mem_peak = v if mem_peak is None else max(mem_peak, v)
                 except ValueError:
                     pass
-            m = re.search(r"cpu:\s*load1=([\d.]+)", line)
+            m = re.search(r"cpu:\s*load1=([\d.]+)(?:\s+nproc=(\d+))?", line)
             if m:
                 try:
                     v = float(m.group(1))
                     load_peak = v if load_peak is None else max(load_peak, v)
                 except ValueError:
                     pass
+                if m.group(2):
+                    nproc = int(m.group(2))
     # OS hostname: the node launcher writes "node=<host> items=..." on the
     # first line of run.log. Prefer it as the displayed name so a run folder
     # matches the box (folder itself may be an IP on legacy runs).
@@ -356,6 +374,7 @@ def _analyze_node(ndir):
         "sensor_ticks": sensor_ticks,
         "mem_peak": mem_peak,
         "load_peak": load_peak,
+        "nproc": nproc,
         "hostname": hostname,
     }
 
@@ -370,7 +389,7 @@ def build_report(run_dir, nodes):
         per_node[tag] = _analyze_node(ndir) if os.path.isdir(ndir) else \
             {"logs": [], "embedded": [], "linked": [], "findings": [],
              "sensor_path": None, "sensor_ticks": 0,
-             "mem_peak": None, "load_peak": None, "hostname": ""}
+             "mem_peak": None, "load_peak": None, "nproc": None, "hostname": ""}
 
     # Display name: hostname when the node reported one, else the folder tag.
     disp = {}
@@ -417,22 +436,34 @@ def build_report(run_dir, nodes):
         f'<tbody>{"".join(rows)}</tbody></table></div>')
 
     # ---- findings tab ---------------------------------------------------- #
+    # Default view must be reassuring and skimmable: when everything is clean
+    # show one clear line. Only when something FAILed/WARNed list the actual
+    # offending lines (node / log:line / the line itself) so nobody has to dig
+    # through full logs.
     finding_html = []
+    total_bad = 0
     for tag, os_ip, bmc_ip in nodes:
-        info = per_node[tag]
-        fs = info["findings"]
-        finding_html.append(f'<h3>{_esc(disp[tag])} <span class="muted">{_esc(os_ip)}</span> '
-                            f'{_badge("FAIL" if any(f[2]=="FAIL" for f in fs) else ("WARN" if fs else "PASS"))} '
-                            f'<span class="muted">{len(fs)} line(s)</span></h3>')
+        fs = per_node[tag]["findings"]
         if not fs:
-            finding_html.append('<p class="empty">No FAIL / WARN lines found in device logs.</p>')
             continue
+        total_bad += len(fs)
+        worst = "FAIL" if any(f[2] == "FAIL" for f in fs) else "WARN"
+        finding_html.append(
+            f'<h3>{_esc(disp[tag])} <span class="muted">{_esc(os_ip)}</span> '
+            f'{_badge(worst)} <span class="muted">{len(fs)} line(s)</span></h3>')
         for fname, ln, sev, line in fs:
             cls = "finding" if sev == "FAIL" else "finding warn"
             finding_html.append(
-                f'<div class="{cls}"><div class="loc">{_badge(sev)} {_esc(fname)}:{ln}</div>'
-                f'<pre class="snippet">{_esc(line)}</pre></div>')
-    findings_panel_body = "".join(finding_html) or '<p class="empty">No findings.</p>'
+                f'<div class="{cls}"><div class="loc">{_badge(sev)} {_esc(disp[tag])} · '
+                f'{_esc(fname)}:{ln}</div><pre class="snippet">{_esc(line)}</pre></div>')
+
+    if total_bad == 0:
+        findings_panel_body = (
+            '<p class="clean">All ' + str(len(nodes)) +
+            ' nodes clean &mdash; 0 FAIL / WARN lines in cpu, dimm, ssd, '
+            'dmesg, BMC SEL and EventLog.</p>')
+    else:
+        findings_panel_body = "".join(finding_html)
 
     # ---- per-node panels ------------------------------------------------- #
     choices, panels = [], []
@@ -467,7 +498,7 @@ def build_report(run_dir, nodes):
             f'<div><dt>OS IP</dt><dd>{_esc(os_ip)}</dd></div>'
             f'<div><dt>BMC IP</dt><dd>{_esc(bmc_ip)}</dd></div>'
             f'<div><dt>Peak memory</dt><dd>{("%.1f%%" % mp) if mp is not None else "-"}</dd></div>'
-            f'<div><dt>Peak load1</dt><dd>{("%.1f" % lp) if lp is not None else "-"}</dd></div>'
+            f'<div><dt>Peak load</dt><dd>{("%.1f" % lp) + _load_label(lp, info.get("nproc")) if lp is not None else "-"}</dd></div>'
             f'<div><dt>Sensor samples</dt><dd>{info["sensor_ticks"]}</dd></div>'
             f'<div><dt>Findings</dt><dd>{nf}</dd></div>'
             '</dl>')
