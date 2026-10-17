@@ -177,6 +177,110 @@ def _is_benign(line):
     return bool(_BENIGN_RE.search(line))
 
 
+# ----- per-item verdicts -------------------------------------------------- #
+# Each stressor reports success/failure in its own vocabulary, so match the
+# precise success/failure token, never a bare "fail"/"error" (stress-ng labels
+# its success line "failed: 0", fio reports "err= 0", stressapptest ends with
+# "Status: PASS"). Returns "PASS" / "FAIL" / "-" (item not run / no log).
+
+def _verdict_cpu(ndir):
+    path = os.path.join(ndir, "cpu.log")
+    if not os.path.isfile(path):
+        return "-"
+    txt = _read(path)
+    if "successful run completed" not in txt and "passed:" not in txt:
+        return "FAIL"
+    bad = False
+    for m in re.finditer(r"failed:\s*(\d+)", txt):
+        if int(m.group(1)) > 0:
+            bad = True
+    return "FAIL" if bad else "PASS"
+
+
+def _verdict_dimm(ndir):
+    path = os.path.join(ndir, "dimm.log")
+    if not os.path.isfile(path):
+        return "-"
+    txt = _read(path)
+    m = re.search(r"Status:\s*(PASS|FAIL)", txt)
+    if m:
+        return m.group(1)
+    m = re.search(r"(\d+)\s+hardware incidents", txt) or re.search(r"with\s+\d+\s+hardware incidents,\s*(\d+)\s+errors", txt)
+    # fall back to counting incidents/errors
+    inc = re.search(r"(\d+)\s+hardware incidents", txt)
+    err = re.search(r",\s*(\d+)\s+errors", txt)
+    if inc and int(inc.group(1)) > 0:
+        return "FAIL"
+    if err and int(err.group(1)) > 0:
+        return "FAIL"
+    return "PASS" if ("hardware incidents" in txt or "errors" in txt) else "FAIL"
+
+
+def _verdict_ssd(ndir):
+    path = os.path.join(ndir, "ssd.log")
+    if not os.path.isfile(path):
+        return "-"
+    txt = _read(path)
+    if "Run status group" not in txt and "Disk stats" not in txt:
+        return "FAIL"
+    bad = False
+    for m in re.finditer(r"err=\s*(\d+)", txt):
+        if int(m.group(1)) > 0:
+            bad = True
+    return "FAIL" if bad else "PASS"
+
+
+def _verdict_bf4(ndir):
+    files = [f for f in os.listdir(ndir) if re.match(r"bf4.*\.log$", f)] \
+        if os.path.isdir(ndir) else []
+    if not files:
+        return "-"
+    bad = False
+    for f in files:
+        for line in _read(os.path.join(ndir, f)).splitlines():
+            if FINDING_RE.search(line) and not _is_benign(line):
+                bad = True
+    return "FAIL" if bad else "PASS"
+
+
+def _verdict_dmesg(ndir):
+    path = os.path.join(ndir, "dmesg.log")
+    if not os.path.isfile(path):
+        return "-"
+    for line in _read(path).splitlines():
+        if FINDING_RE.search(line) and not _is_benign(line):
+            return "FAIL"
+    return "PASS"
+
+
+def _verdict_bmc(ndir):
+    sel = os.path.join(ndir, "bmc_sel.log")
+    evt = os.path.join(ndir, "bmc_event.log")
+    if not os.path.isfile(sel) and not os.path.isfile(evt):
+        return "-"
+    txt = ""
+    if os.path.isfile(sel):
+        txt += _read(sel) + "\n"
+    if os.path.isfile(evt):
+        txt += _read(evt)
+    # EventLog severities other than OK/Cleared are problems.
+    for sev in re.findall(r'"Severity"\s*:\s*"([^"]+)"', txt, re.I):
+        if sev.strip().upper() not in ("OK", ""):
+            return "FAIL"
+    # SEL lines: anything other than the empty marker is an entry.
+    for line in txt.splitlines():
+        ln = line.strip()
+        if not ln or ln == "[" or ln == "]":
+            continue
+        if ln.upper().startswith("SEL HAS NO ENTRIES"):
+            continue
+        if re.search(r'"@odata|"EntryType"|"Message"|"Name"|"Id"|"Created"|"Modified"|"Resolved"|"Severity"|\{|\}', ln):
+            continue
+        if FINDING_RE.search(line) and not _is_benign(line):
+            return "FAIL"
+    return "PASS"
+
+
 def _analyze_node(ndir):
     """Return per-node summary: log files, findings, sensor summary."""
     logs = sorted(os.listdir(ndir)) if os.path.isdir(ndir) else []
@@ -184,6 +288,9 @@ def _analyze_node(ndir):
     for name in logs:
         full = os.path.join(ndir, name)
         if not os.path.isfile(full):
+            continue
+        # Never surface editor/backup artifacts (e.g. dmesg.log.bak-prefilter).
+        if ".bak" in name:
             continue
         if name in LINK_LOGS:
             linked.append(name)
@@ -270,29 +377,43 @@ def build_report(run_dir, nodes):
     for tag, os_ip, bmc_ip in nodes:
         disp[tag] = per_node[tag].get("hostname") or tag
 
+    # ---- per-item verdicts ---------------------------------------------- #
+    def verdicts(ndir):
+        return {
+            "CPU": _verdict_cpu(ndir),
+            "DIMM": _verdict_dimm(ndir),
+            "SSD": _verdict_ssd(ndir),
+            "BF4": _verdict_bf4(ndir),
+            "dmesg": _verdict_dmesg(ndir),
+            "BMC": _verdict_bmc(ndir),
+        }
+
     # ---- overview table -------------------------------------------------- #
     rows = []
     total_findings = 0
     for i, (tag, os_ip, bmc_ip) in enumerate(nodes):
         info = per_node[tag]
-        nf = len(info["findings"])
-        total_findings += nf
-        status = "PASS" if nf == 0 else ("FAIL" if any(f[2] == "FAIL" for f in info["findings"]) else "WARN")
-        mp = info.get("mem_peak")
-        lp = info.get("load_peak")
-        mem_txt = f"{mp:.1f}%" if mp is not None else "-"
-        load_txt = f"{lp:.1f}" if lp is not None else "-"
+        ndir = os.path.join(run_dir, tag)
+        v = verdicts(ndir)
+        item_vals = [v[k] for k in ("CPU", "DIMM", "SSD", "BF4")]
+        sys_vals = [v[k] for k in ("dmesg", "BMC")]
+        ran = [x for x in item_vals if x != "-"]
+        status = "FAIL" if any(x == "FAIL" for x in item_vals + sys_vals) \
+            else ("PASS" if ran else "-")
+        total_findings += len(info["findings"])
         rows.append(
             f'<tr><td class="target"><a href="#node-{i}" data-panel="node-{i}">{_esc(disp[tag])}</a>'
             f'<small>{_esc(os_ip)}</small></td>'
             f'<td>{_badge(status)}</td>'
-            f'<td>{mem_txt}</td>'
-            f'<td>{load_txt}</td>'
-            f'<td>{info["sensor_ticks"]}</td>'
-            f'<td>{nf}</td></tr>')
+            f'<td>{_badge(v["CPU"])}</td>'
+            f'<td>{_badge(v["DIMM"])}</td>'
+            f'<td>{_badge(v["SSD"])}</td>'
+            f'<td>{_badge(v["BF4"])}</td>'
+            f'<td>{_badge(v["dmesg"])}</td>'
+            f'<td>{_badge(v["BMC"])}</td></tr>')
     overview_table = (
         '<div class="tablewrap"><table><thead><tr><th>Node</th><th>Status</th>'
-        '<th>Peak mem</th><th>Peak load</th><th>Sensor samples</th><th>Findings</th></tr></thead>'
+        '<th>CPU</th><th>DIMM</th><th>SSD</th><th>BF4</th><th>dmesg</th><th>BMC</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>')
 
     # ---- findings tab ---------------------------------------------------- #
