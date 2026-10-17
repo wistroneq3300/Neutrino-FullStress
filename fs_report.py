@@ -17,6 +17,21 @@ Layout it expects (all under a single run directory):
 import html
 import os
 import re
+from pathlib import Path
+
+ASSETS = Path(__file__).parent
+
+
+def _wistron_logo():
+    """Inline the official two-colour Wistron wordmark for a self-contained report."""
+    try:
+        svg = (ASSETS / "wistron-logo.svg").read_text(encoding="utf-8")
+    except OSError:
+        return '<span class="brand-fallback">Wistron</span>'
+    # An XML declaration/doctype is fine in a standalone .svg but not in HTML.
+    svg = re.sub(r"<\?xml[^>]*\?>|<!DOCTYPE[^>]*>", "", svg, flags=re.I)
+    return f'<span class="brand-mark" role="img" aria-label="Wistron">{svg}</span>'
+
 
 # Device logs shown embedded (collapsible). Everything else is linked.
 EMBED_LOGS = ("cpu.log", "dimm.log", "ssd.log",
@@ -43,6 +58,11 @@ a{color:var(--brand);text-underline-offset:3px;overflow-wrap:anywhere}a:hover{co
 code,pre{font-family:Consolas,"Liberation Mono",monospace;font-size:13px}
 .brandbar{background:#fff;color:#123b59;border-bottom:1px solid #00a0be;padding:16px max(24px,calc((100vw - 1320px)/2))}
 .brand{font-size:24px;font-weight:650;letter-spacing:-.02em}.brand small{font-size:14px;font-weight:400;margin-left:18px;color:#526579}
+.brand-lockup{display:flex;align-items:center;gap:18px;min-width:0}
+.brand-mark{display:inline-flex;align-items:center;flex:0 0 auto}
+.brand-mark svg{display:block;width:156px;height:auto}
+.brand-fallback{font-size:24px;font-weight:650;letter-spacing:-.02em;color:#016c8c}
+.brandbar .brand-caption{color:#526579;font-size:14px;white-space:nowrap}
 header,main,footer{max-width:1376px;margin:auto;padding:24px 28px}header{padding-bottom:0}
 h1{font-size:34px;line-height:1.15;letter-spacing:-.025em;font-weight:650;margin:5px 0 12px}
 h2{font-size:23px;line-height:1.3;margin:0 0 18px;font-weight:650}h3{font-size:17px;margin:24px 0 12px}
@@ -381,7 +401,7 @@ def build_report(run_dir, nodes):
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Fullstress {_esc(stamp)}</title>
 <style>{CSS}</style></head><body>
-<div class="brandbar"><div class="brand">Neutrino / Vera L10 <small>Full-stress run {_esc(stamp)}</small></div></div>
+<div class="brandbar"><div class="brand-lockup">{_wistron_logo()}<span class="brand-caption">Neutrino / Vera L10 &middot; Full-stress run {_esc(stamp)}</span></div></div>
 <header><button id="print-report">Print</button><h1>Full-stress report</h1>
 <div class="runline"><code>{_esc(stamp)}</code><span class="muted">{len(nodes)} nodes</span></div>
 <nav class="tabs" role="tablist">{tab_html}</nav></header>

@@ -137,6 +137,30 @@ def os_hostname(ip, user=DEFAULT_SSH_USER, passwd=DEFAULT_SSH_PASS, timeout=8):
         return ""
 
 
+# Per-IP log-folder tag. Defaults to the IP with dots as underscores, but is
+# replaced by the node's OS hostname once discovered (see resolve_node_tags).
+# Hostnames are stable across DHCP/aux power cycles, so run folders keep the
+# same name the operator sees on the box; falls back to the IP when the
+# hostname cannot be read.
+NODE_TAGS = {}
+
+
+def fallback_tag(ip):
+    return ip.replace(".", "_")
+
+
+def tag_for(ip):
+    return NODE_TAGS.get(ip) or fallback_tag(ip)
+
+
+def resolve_node_tags(ips, user=DEFAULT_SSH_USER, passwd=DEFAULT_SSH_PASS):
+    """Populate NODE_TAGS with each node's OS hostname (fallback: IP)."""
+    for ip in ips:
+        host = os_hostname(ip, user, passwd)
+        NODE_TAGS[ip] = host if host else fallback_tag(ip)
+    return NODE_TAGS
+
+
 def ask(prompt, default=None):
     suffix = f" [{default}]" if default is not None else ""
     val = input(f"{prompt}{suffix}: ").strip()
@@ -666,7 +690,7 @@ def build_bf4_cmd(seconds, server_dev, client_dev,
 
 def remote_run(ip, user, passwd, script, background=True):
     """Ship `script` to a remote node and run it. Returns Popen or None."""
-    tag = ip.replace(".", "_")
+    tag = tag_for(ip)
     local = os.path.join(CMD_DIR, f"node_{tag}.sh")
     with open(local, "w") as f:
         f.write("#!/bin/bash\n")
@@ -1123,7 +1147,7 @@ def capture_node_diag(ips, user, passwd, run_dir):
     - bmc_event.log  : BMC Redfish EventLog
     """
     for ip in ips:
-        tag = ip.replace(".", "_")
+        tag = tag_for(ip)
         ndir = os.path.join(run_dir, tag)
         os.makedirs(ndir, exist_ok=True)
 
@@ -1159,7 +1183,7 @@ def collect_node_logs(ips, user, passwd, stamp, run_dir):
     """scp each node's /root/fullstress_logs/<tag>/<stamp>/ back under run_dir."""
     os.makedirs(run_dir, exist_ok=True)
     for ip in ips:
-        tag = ip.replace(".", "_")
+        tag = tag_for(ip)
         remote = f"/root/fullstress_logs/{tag}/{stamp}"
         dest = os.path.join(run_dir, tag)
         os.makedirs(dest, exist_ok=True)
@@ -1246,9 +1270,16 @@ def main():
     print("\n[*] pre-run: clearing BMC logs (SEL + EventLog + Redfish SEL) ...")
     pre_clear = clear_all_logs(cfg["remote_ips"])
 
+    # Discover OS hostnames so log folders are named after the host (stable
+    # across power cycles), not the IP. Falls back to the IP per node.
+    print("\n[*] resolving node hostnames ...")
+    resolve_node_tags(cfg["remote_ips"], cfg["ssh_user"], cfg["ssh_pass"])
+    for ip in cfg["remote_ips"]:
+        print(f"    {ip} -> {tag_for(ip)}")
+
     procs = []
     for ip in cfg["remote_ips"]:
-        tag = ip.replace(".", "_")
+        tag = tag_for(ip)
         # remote nodes log to /root/fullstress_logs on their own disk
         rscript = build_node_script(cfg, node_tag=tag,
                                     log_root="/root/fullstress_logs",
@@ -1287,7 +1318,7 @@ def main():
                       stamp, run_dir)
     print("[*] capturing per-node dmesg + BMC SEL/EventLog ...")
     capture_node_diag(cfg["remote_ips"], cfg["ssh_user"], cfg["ssh_pass"], run_dir)
-    nodes = [(ip.replace(".", "_"), ip, bmc_ip_for(ip) or "") for ip in cfg["remote_ips"]]
+    nodes = [(tag_for(ip), ip, bmc_ip_for(ip) or "") for ip in cfg["remote_ips"]]
     try:
         import fs_report
         html_path = fs_report.build_report(run_dir, nodes)
