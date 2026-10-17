@@ -924,6 +924,24 @@ def build_node_script(cfg, node_tag="local", log_root=None, stamp=None):
     lines.append('echo "# full ipmitool sdr snapshot every ' + str(POWER_INTERVAL) + 's (### <epoch> <iso> then one line per sensor)" > "$PWR_LOG"')
     lines.append(f'({sampler}) >> "$PWR_LOG" 2>/dev/null & PWR_PID=$!')
     lines.append('echo "  sensor sampler pid=$PWR_PID"')
+    # Resource sampler: record memory % and CPU load every interval so the
+    # run shows how much RAM/CPU the stress actually reached (peak review).
+    _memcmd = ('awk \'/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} '
+               'END{u=t-a; printf "mem: used=%dMB / total=%dMB (%.1f%%) avail=%dMB\\n", '
+               'u/1024, t/1024, u*100/t, a/1024}\' /proc/meminfo')
+    _swapcmd = ('awk \'/^SwapTotal:/{t=$2} /^SwapFree:/{f=$2} '
+                'END{printf "swap: used=%dMB / total=%dMB\\n", (t-f)/1024, t/1024}\' /proc/meminfo')
+    res_sampler = (
+        'while true; do '
+        'echo "### $(date +%s) $(date +%Y-%m-%dT%H:%M:%S)"; '
+        + _memcmd + '; ' + _swapcmd + '; '
+        'printf "cpu: load1=%s nproc=%s\\n" "$(cut -d\" \" -f1 /proc/loadavg)" "$(nproc)"; '
+        'sleep ' + str(POWER_INTERVAL) + '; done'
+    )
+    lines.append('RES_LOG="$LOGDIR/resource.log"')
+    lines.append('echo "# resource sample every ' + str(POWER_INTERVAL) + 's (### <epoch> <iso> then mem/swap/cpu)" > "$RES_LOG"')
+    lines.append('(' + res_sampler + ') >> "$RES_LOG" 2>/dev/null & RES_PID=$!')
+    lines.append('echo "  resource sampler pid=$RES_PID"')
     lines.append('PIDS=""')
 
     # All stressors run in PARALLEL (that is what "full stress" means):
@@ -976,7 +994,7 @@ def build_node_script(cfg, node_tag="local", log_root=None, stamp=None):
 
     lines.append('echo "--- waiting for all stressors (parallel) ---"')
     lines.append('for p in $PIDS; do wait $p 2>/dev/null; done')
-    lines.append('kill $PWR_PID 2>/dev/null; true')
+    lines.append('kill $PWR_PID $RES_PID 2>/dev/null; true')
     lines.append('echo "=== fullstress done $(date) ==="')
     lines.append(f'echo "logs in: {logdir}"')
     return "\n".join(lines)
