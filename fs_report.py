@@ -11,7 +11,7 @@ Self-contained, offline. Follows the visual style of the cycle report
 
 Layout it expects (all under a single run directory):
     <run>/<node-tag>/...           # collected node logs
-    <run>/fullstress-report.html              # this file
+    <run>/Fullstress-report.html              # this file
 """
 
 import html
@@ -412,7 +412,7 @@ def _analyze_node(ndir):
 
 
 def build_report(run_dir, nodes):
-    """nodes: list of (tag, os_ip, bmc_ip). Writes run_dir/fullstress-report.html."""
+    """nodes: list of (tag, os_ip, bmc_ip). Writes run_dir/Fullstress-report.html."""
     run_dir = os.path.abspath(run_dir)
     stamp = os.path.basename(run_dir.rstrip("/"))
     per_node = {}
