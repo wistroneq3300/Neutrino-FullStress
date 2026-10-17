@@ -289,7 +289,7 @@ def _load_label(load, nproc):
     if nproc:
         ratio = load / nproc
         if ratio >= 1.0:
-            return " (\u2248 CPU saturated)"
+            return " (CPU at full load)"
         if ratio >= 0.5:
             return " (CPU busy)"
         return " (CPU load low)"
