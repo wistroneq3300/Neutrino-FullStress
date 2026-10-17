@@ -231,6 +231,15 @@ def _analyze_node(ndir):
                     load_peak = v if load_peak is None else max(load_peak, v)
                 except ValueError:
                     pass
+    # OS hostname: the node launcher writes "node=<host> items=..." on the
+    # first line of run.log. Prefer it as the displayed name so a run folder
+    # matches the box (folder itself may be an IP on legacy runs).
+    hostname = ""
+    run_path = os.path.join(ndir, "run.log")
+    if os.path.isfile(run_path):
+        m = re.search(r"^node=(\S+)", _read(run_path), re.M)
+        if m:
+            hostname = m.group(1)
     return {
         "logs": logs,
         "embedded": embedded,
@@ -240,6 +249,7 @@ def _analyze_node(ndir):
         "sensor_ticks": sensor_ticks,
         "mem_peak": mem_peak,
         "load_peak": load_peak,
+        "hostname": hostname,
     }
 
 
@@ -253,7 +263,12 @@ def build_report(run_dir, nodes):
         per_node[tag] = _analyze_node(ndir) if os.path.isdir(ndir) else \
             {"logs": [], "embedded": [], "linked": [], "findings": [],
              "sensor_path": None, "sensor_ticks": 0,
-             "mem_peak": None, "load_peak": None}
+             "mem_peak": None, "load_peak": None, "hostname": ""}
+
+    # Display name: hostname when the node reported one, else the folder tag.
+    disp = {}
+    for tag, os_ip, bmc_ip in nodes:
+        disp[tag] = per_node[tag].get("hostname") or tag
 
     # ---- overview table -------------------------------------------------- #
     rows = []
@@ -268,7 +283,7 @@ def build_report(run_dir, nodes):
         mem_txt = f"{mp:.1f}%" if mp is not None else "-"
         load_txt = f"{lp:.1f}" if lp is not None else "-"
         rows.append(
-            f'<tr><td class="target"><a href="#node-{i}" data-panel="node-{i}">{_esc(tag)}</a>'
+            f'<tr><td class="target"><a href="#node-{i}" data-panel="node-{i}">{_esc(disp[tag])}</a>'
             f'<small>{_esc(os_ip)}</small></td>'
             f'<td>{_badge(status)}</td>'
             f'<td>{mem_txt}</td>'
@@ -285,7 +300,7 @@ def build_report(run_dir, nodes):
     for tag, os_ip, bmc_ip in nodes:
         info = per_node[tag]
         fs = info["findings"]
-        finding_html.append(f'<h3>{_esc(tag)} <span class="muted">{_esc(os_ip)}</span> '
+        finding_html.append(f'<h3>{_esc(disp[tag])} <span class="muted">{_esc(os_ip)}</span> '
                             f'{_badge("FAIL" if any(f[2]=="FAIL" for f in fs) else ("WARN" if fs else "PASS"))} '
                             f'<span class="muted">{len(fs)} line(s)</span></h3>')
         if not fs:
@@ -304,7 +319,7 @@ def build_report(run_dir, nodes):
         info = per_node[tag]
         nf = len(info["findings"])
         status = "PASS" if nf == 0 else ("FAIL" if any(f[2] == "FAIL" for f in info["findings"]) else "WARN")
-        choices.append(f'<a class="node-choice" href="#node-{i}" data-panel="node-{i}">{_esc(tag)} '
+        choices.append(f'<a class="node-choice" href="#node-{i}" data-panel="node-{i}">{_esc(disp[tag])} '
                        f'{_badge(status)}<small>{_esc(os_ip)}</small></a>')
 
         # embedded device logs (collapsible)
@@ -345,7 +360,7 @@ def build_report(run_dir, nodes):
         nf_block = "".join(nf_html) or '<p class="empty">No FAIL / WARN lines.</p>'
 
         panels.append(
-            f'<article class="node-panel" id="node-{i}" hidden><h2>{_esc(tag)} {_badge(status)}</h2>'
+            f'<article class="node-panel" id="node-{i}" hidden><h2>{_esc(disp[tag])} {_badge(status)}</h2>'
             f'{facts}'
             f'<h3>Findings</h3>{nf_block}'
             f'<h3>Device logs (embedded)</h3>{emb_html}'
