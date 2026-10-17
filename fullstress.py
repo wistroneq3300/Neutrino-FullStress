@@ -130,7 +130,8 @@ def os_hostname(ip, user=DEFAULT_SSH_USER, passwd=DEFAULT_SSH_PASS, timeout=8):
              "-o", "UserKnownHostsFile=/dev/null",
              "-o", f"ConnectTimeout={timeout}",
              f"{user}@{ip}", "hostname"],
-            capture_output=True, text=True, timeout=timeout + 4)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, timeout=timeout + 4)
         return out.stdout.strip() if out.returncode == 0 else ""
     except Exception:
         return ""
@@ -1078,7 +1079,8 @@ def collect_node_logs(ips, user, passwd, stamp, run_dir):
                "-o", "StrictHostKeyChecking=no",
                "-o", "UserKnownHostsFile=/dev/null",
                f"{user}@{ip}:{remote}/*", dest]
-        r = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        r = subprocess.run(cmd, check=False, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, universal_newlines=True)
         n = len([x for x in os.listdir(dest)]) if os.path.isdir(dest) else 0
         print(f"  [{ip}] collected {n} file(s) -> {dest}")
         if r.returncode != 0:
