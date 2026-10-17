@@ -1323,7 +1323,7 @@ def main():
     try:
         import fs_report
         html_path = fs_report.build_report(run_dir, nodes)
-        out = os.path.join(run_dir, "report.html")
+        out = os.path.join(run_dir, "fullstress-report.html")
         with open(out, "w", encoding="utf-8") as f:
             f.write(html_path)
         print(f"[+] report: {out}")
