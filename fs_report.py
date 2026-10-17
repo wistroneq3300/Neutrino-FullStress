@@ -187,7 +187,7 @@ def _is_benign(line):
 def _verdict_cpu(ndir):
     path = os.path.join(ndir, "cpu.log")
     if not os.path.isfile(path):
-        return "-"
+        return "N/A"
     txt = _read(path)
     if "successful run completed" not in txt and "passed:" not in txt:
         return "FAIL"
@@ -201,7 +201,7 @@ def _verdict_cpu(ndir):
 def _verdict_dimm(ndir):
     path = os.path.join(ndir, "dimm.log")
     if not os.path.isfile(path):
-        return "-"
+        return "N/A"
     txt = _read(path)
     m = re.search(r"Status:\s*(PASS|FAIL)", txt)
     if m:
@@ -220,7 +220,7 @@ def _verdict_dimm(ndir):
 def _verdict_ssd(ndir):
     path = os.path.join(ndir, "ssd.log")
     if not os.path.isfile(path):
-        return "-"
+        return "N/A"
     txt = _read(path)
     if "Run status group" not in txt and "Disk stats" not in txt:
         return "FAIL"
@@ -235,7 +235,7 @@ def _verdict_bf4(ndir):
     files = [f for f in os.listdir(ndir) if re.match(r"bf4.*\.log$", f)] \
         if os.path.isdir(ndir) else []
     if not files:
-        return "-"
+        return "N/A"
     bad = False
     for f in files:
         for line in _read(os.path.join(ndir, f)).splitlines():
@@ -247,7 +247,7 @@ def _verdict_bf4(ndir):
 def _verdict_dmesg(ndir):
     path = os.path.join(ndir, "dmesg.log")
     if not os.path.isfile(path):
-        return "-"
+        return "N/A"
     for line in _read(path).splitlines():
         if FINDING_RE.search(line) and not _is_benign(line):
             return "FAIL"
@@ -258,7 +258,7 @@ def _verdict_bmc(ndir):
     sel = os.path.join(ndir, "bmc_sel.log")
     evt = os.path.join(ndir, "bmc_event.log")
     if not os.path.isfile(sel) and not os.path.isfile(evt):
-        return "-"
+        return "N/A"
     txt = ""
     if os.path.isfile(sel):
         txt += _read(sel) + "\n"
@@ -416,9 +416,9 @@ def build_report(run_dir, nodes):
         v = verdicts(ndir)
         item_vals = [v[k] for k in ("CPU", "DIMM", "SSD", "BF4")]
         sys_vals = [v[k] for k in ("dmesg", "BMC")]
-        ran = [x for x in item_vals if x != "-"]
+        ran = [x for x in item_vals if x not in ("-", "N/A")]
         status = "FAIL" if any(x == "FAIL" for x in item_vals + sys_vals) \
-            else ("PASS" if ran else "-")
+            else ("PASS" if ran else "N/A")
         total_findings += len(info["findings"])
         rows.append(
             f'<tr><td class="target"><a href="#node-{i}" data-panel="node-{i}">{_esc(disp[tag])}</a>'
