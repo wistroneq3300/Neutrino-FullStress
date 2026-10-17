@@ -264,13 +264,13 @@ SSH_OPTS = ["-o", "StrictHostKeyChecking=no",
             "-o", "ConnectTimeout=8"]
 
 
-def _ssh(ip, user, passwd, cmd):
+def _ssh(ip, user, passwd, cmd, timeout=25):
     """Run a command on a remote node over sshpass, return stdout."""
     full = ["sshpass", "-p", passwd, "ssh"] + SSH_OPTS + \
            [f"{user}@{ip}", cmd]
     try:
         return subprocess.check_output(full, universal_newlines=True,
-                                       stderr=subprocess.DEVNULL, timeout=25)
+                                       stderr=subprocess.DEVNULL, timeout=timeout)
     except Exception:
         return ""
 
@@ -1172,10 +1172,55 @@ def collect_node_logs(ips, user, passwd, stamp, run_dir):
             print(f"  [{ip}] scp warning: {r.stderr.strip()[:200]}")
 
 
+def ensure_remote_deps(cfg):
+    """Install missing stress tools on every remote node BEFORE the GO prompt.
+
+    Only installs what is missing (idempotent). Returns True when every node is
+    ready, False if any install failed (caller aborts and asks for manual setup).
+    ib_write_* is NOT installed: it ships with the OS image on this rig.
+    """
+    pkgs = ["stress-ng", "stressapptest", "fio"]
+    user, passwd = cfg["ssh_user"], cfg["ssh_pass"]
+    ok = True
+    for ip in cfg["remote_ips"]:
+        print(f"\n[*] checking dependencies on {ip} ...")
+        # Which of the required tools are absent? Map tool -> package name.
+        probe = " ; ".join(f"command -v {t} >/dev/null 2>&1 && echo HAVE_{t}" for t in pkgs)
+        found = _ssh(ip, user, passwd, probe)
+        missing = [t for t in pkgs if f"HAVE_{t}" not in found]
+        if not missing:
+            print(f"    {_c('OK', 'green')} all present ({', '.join(pkgs)})")
+            continue
+        print(f"    missing: {', '.join(missing)} — installing via apt ...")
+        install = ("export DEBIAN_FRONTEND=noninteractive; "
+                   "apt-get update && apt-get install -y --no-install-recommends "
+                   + " ".join(missing))
+        # apt over a slow link can take minutes; don't reuse the 25s control timeout.
+        _ssh(ip, user, passwd, install, timeout=600)
+        # Re-check after install: apt can "succeed" while leaving a tool absent.
+        recheck = _ssh(ip, user, passwd, probe)
+        still = [t for t in missing if f"HAVE_{t}" not in recheck]
+        if still:
+            print(f"  {_c('!! INSTALL FAILED on ' + ip + ': ' + ', '.join(still), 'red')}")
+            print(f"     Please install manually on {ip}: "
+                  f"apt-get install -y {', '.join(still)}")
+            ok = False
+        else:
+            print(f"  {_c('OK', 'green')} installed: {', '.join(missing)}")
+    if not ok:
+        print("\n" + _c("  Dependency installation failed on at least one node; "
+                        "aborting before start.", "red"))
+    return ok
+
+
 def main():
     banner()
     os.makedirs(CMD_DIR, exist_ok=True)
     cfg = collect_menu()
+
+    # --- deps: ensure stress tools exist on every node BEFORE the GO prompt ---
+    if not ensure_remote_deps(cfg):
+        return 1
 
     print("\n" + "-" * 72)
     print("  SUMMARY")
