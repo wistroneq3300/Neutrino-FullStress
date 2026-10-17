@@ -806,18 +806,26 @@ def collect_menu():
             out = remote_ssd_status(ip, cfg["ssh_user"], cfg["ssh_pass"])
             r = parse_remote_ssd(out, SSD_BDF_ALLOW)
             _print_ssd_row(ip, r)
-            if r and target is None and not is_denied_bdf(r.get("bdf", "")):
+            if r and target is None:
                 target = r
         if target:
-            cfg["ssd_drive"] = target["dev"]
-            cfg["ssd_bdf"] = target["bdf"]
-            print(f"  => will run fio (randwrite, max load) on "
-                  f"{target['dev']} ({target['bdf']})")
+            mps = target.get("mountpoints") or target.get("mounts") or []
+            blocked = None
+            if is_denied_bdf(target.get("bdf", "")):
+                blocked = "target BDF matches an OS/protected drive"
+            elif mps:
+                blocked = f"target disk is mounted ({', '.join(mps)})"
+            if blocked:
+                # Hard block: never write to a mounted or OS disk.
+                print(f"  !! BLOCKED — {blocked}; refusing SSD run")
+                cfg["ssd_drive"] = None
+                cfg["ssd_bdf"] = None
+            else:
+                cfg["ssd_drive"] = target["dev"]
+                cfg["ssd_bdf"] = target["bdf"]
+                print(f"  => will run fio (randwrite, max load) on "
+                      f"{target['dev']} ({target['bdf']})")
         else:
-            cfg["ssd_drive"] = None
-        # hard guard: never allow the OS drive
-        if target and is_denied_bdf(target["bdf"]):
-            print("  !! target BDF matches an OS drive — refusing SSD run")
             cfg["ssd_drive"] = None
 
     if "bf4" in picked:
