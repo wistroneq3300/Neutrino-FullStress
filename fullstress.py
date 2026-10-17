@@ -610,15 +610,16 @@ def build_dimm_cmd(seconds, mem_mb):
 def dimm_mem_mb(cfg):
     """Compute -M (MB) for stressapptest.
 
-    Single item  -> 90% of total.
-    Multi item   -> 80% of total, always keep >= 16 GB free.
-    (CPU/SSD/BF4 also run in the multi case; 80% avoids OOM.)
+    Use 90% of RAM in every case (single or multi item), always keep
+    >= 74 GB free. BF4 is RDMA (ib_write_bw, a few MB) and CPU is
+    compute-only, so the real memory pressure besides DIMM is fio's page
+    cache, which the kernel reclaims under pressure; 90% with a 74 GB
+    reserve is the agreed budget.
     """
     total_mb = int((os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) / 1e6)
-    n_items = len(cfg.get("items", []))
-    pct = 90 if n_items <= 1 else 80
+    pct = 90
     mem = int(total_mb * pct / 100)
-    reserve = 16384  # keep 16 GB for OS + other stressors
+    reserve = 75776  # keep 74 GB for OS + other stressors
     if total_mb - reserve > 0:
         mem = min(mem, total_mb - reserve)
     return max(mem, 1024), total_mb, pct
@@ -886,7 +887,7 @@ def collect_menu():
         print("\n[6] DIMM")
         _, total_mb, pct = dimm_mem_mb(cfg)
         print(f"  stressapptest will use ~{pct}% of RAM "
-              f"(multi-item=80%, single=90%, keep >=16GB)")
+              f"(all cases, keep >=74GB)")
         cfg["dimm_mb"] = 0
 
     return cfg
@@ -982,14 +983,13 @@ def build_node_script(cfg, node_tag="local", log_root=None, stamp=None):
         # Compute the memory budget ON THE NODE from its own MemTotal; the
         # jumper may have far less RAM than the nodes (32GB vs 1.5TB), which
         # silently shrank the stress to a tiny fraction of each node.
-        n_items = len(cfg["items"])
-        pct = 90 if n_items <= 1 else 80
+        pct = 90
         lines.append('if ! command -v stressapptest >/dev/null 2>&1; then')
         lines.append('  echo "  ! stressapptest not installed; skipping DIMM" > "$LOGDIR/dimm.log"')
         lines.append('else')
         lines.append('  TOTAL_MB=$(( $(awk "/^MemTotal:/{print \$2}" /proc/meminfo) / 1024 ))')
         lines.append(f'  MB=$(( TOTAL_MB * {pct} / 100 ))')
-        lines.append('  RESERVE=16384')
+        lines.append('  RESERVE=75776')
         lines.append('  [ $((TOTAL_MB - RESERVE)) -gt 0 ] && [ $MB -gt $((TOTAL_MB - RESERVE)) ] && MB=$((TOTAL_MB - RESERVE))')
         lines.append('  [ $MB -lt 1024 ] && MB=1024')
         lines.append('  THREADS=$(nproc)')
