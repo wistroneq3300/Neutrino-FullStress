@@ -282,6 +282,38 @@ def _verdict_bmc(ndir):
     return "PASS"
 
 
+def _dmesg_lines(ndir):
+    """Offending lines from dmesg.log (benign-filtered), as (log, lineno, sev, line)."""
+    out = []
+    path = os.path.join(ndir, "dmesg.log")
+    if not os.path.isfile(path):
+        return out
+    for ln, line in enumerate(_read(path).splitlines(), 1):
+        if FINDING_RE.search(line) and not _is_benign(line):
+            out.append(("dmesg.log", ln, "FAIL", line.strip()))
+    return out
+
+
+def _bmc_lines(ndir):
+    """Offending lines from BMC SEL + Redfish EventLog."""
+    out = []
+    sel = os.path.join(ndir, "bmc_sel.log")
+    if os.path.isfile(sel):
+        for ln, line in enumerate(_read(sel).splitlines(), 1):
+            s = line.strip()
+            if not s or s.upper().startswith("SEL HAS NO ENTRIES"):
+                continue
+            if FINDING_RE.search(line) and not _is_benign(line):
+                out.append(("bmc_sel.log", ln, "FAIL", s))
+    evt = os.path.join(ndir, "bmc_event.log")
+    if os.path.isfile(evt):
+        for ln, line in enumerate(_read(evt).splitlines(), 1):
+            sev = re.search(r'"Severity"\s*:\s*"([^"]+)"', line, re.I)
+            if sev and sev.group(1).strip().upper() not in ("OK", ""):
+                out.append(("bmc_event.log", ln, "FAIL", line.strip()))
+    return out
+
+
 def _load_label(load, nproc):
     """Plain-English hint so a peak-load number is readable at a glance."""
     if load is None:
@@ -499,22 +531,28 @@ def build_report(run_dir, nodes):
             f'<div><dt>BMC IP</dt><dd>{_esc(bmc_ip)}</dd></div>'
             f'<div><dt>Peak memory</dt><dd>{("%.1f%%" % mp) if mp is not None else "-"}</dd></div>'
             f'<div><dt>Peak load</dt><dd>{("%.1f" % lp) + _load_label(lp, info.get("nproc")) if lp is not None else "-"}</dd></div>'
-            f'<div><dt>Sensor samples</dt><dd>{info["sensor_ticks"]}</dd></div>'
-            f'<div><dt>Findings</dt><dd>{nf}</dd></div>'
             '</dl>')
 
-        # node-local findings (same data as Findings tab, scoped)
-        nf_html = []
-        for fname, ln, sev, line in info["findings"]:
-            cls = "finding" if sev == "FAIL" else "finding warn"
-            nf_html.append(f'<div class="{cls}"><div class="loc">{_badge(sev)} {_esc(fname)}:{ln}</div>'
-                           f'<pre class="snippet">{_esc(line)}</pre></div>')
-        nf_block = "".join(nf_html) or '<p class="empty">No FAIL / WARN lines.</p>'
+        # system-layer evidence only: dmesg and BMC (SEL + EventLog). The
+        # per-stressor results live in the overview table (CPU/DIMM/SSD/BF4).
+        def _block(lines, empty):
+            if not lines:
+                return f'<p class="empty">{empty}</p>'
+            h = []
+            for fname, ln, sev, line in lines:
+                h.append(f'<div class="finding"><div class="loc">{_badge(sev)} '
+                         f'{_esc(fname)}:{ln}</div><pre class="snippet">{_esc(line)}</pre></div>')
+            return "".join(h)
+
+        ndir = os.path.join(run_dir, tag)
+        dmesg_block = _block(_dmesg_lines(ndir), "No dmesg findings.")
+        bmc_block = _block(_bmc_lines(ndir), "No BMC SEL / EventLog findings.")
 
         panels.append(
             f'<article class="node-panel" id="node-{i}" hidden><h2>{_esc(disp[tag])} {_badge(status)}</h2>'
             f'{facts}'
-            f'<h3>Findings</h3>{nf_block}'
+            f'<h3>dmesg</h3>{dmesg_block}'
+            f'<h3>BMC (SEL / EventLog)</h3>{bmc_block}'
             f'<h3>Device logs (embedded)</h3>{emb_html}'
             f'<h3>Other evidence (linked)</h3><div>{links_html}</div>'
             f'</article>')
