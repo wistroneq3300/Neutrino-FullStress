@@ -141,6 +141,22 @@ def _read(path):
         return ""
 
 
+# Lines that match FINDING_RE but are actually success, not failures:
+#  - stress-ng prints "failed: 0" on success (the word is a label).
+# in-band ipmi_ssif failures are deliberately NOT suppressed: a true
+# in-band IPMI defect is tracked as a finding (NVIDIA ticket). The run is
+# kept clean by clearing dmesg before start (see fullstress.py), so only
+# messages produced during the run can appear here.
+_BENIGN_RE = re.compile(
+    r"(stress-ng:\s*info:.*failed:\s*0\b)"
+    r"|(\bfailed:\s*0\b)",
+    re.I)
+
+
+def _is_benign(line):
+    return bool(_BENIGN_RE.search(line))
+
+
 def _analyze_node(ndir):
     """Return per-node summary: log files, findings, sensor summary."""
     logs = sorted(os.listdir(ndir)) if os.path.isdir(ndir) else []
@@ -160,9 +176,12 @@ def _analyze_node(ndir):
     for name in embedded:
         full = os.path.join(ndir, name)
         for ln, line in enumerate(_read(full).splitlines(), 1):
-            if FINDING_RE.search(line):
-                sev = "FAIL" if re.search(r"fail|error|critical|fatal|panic|mce|abort", line, re.I) else "WARN"
-                findings.append((name, ln, sev, line.strip()))
+            if not FINDING_RE.search(line):
+                continue
+            if _is_benign(line):
+                continue
+            sev = "FAIL" if re.search(r"fail|error|critical|fatal|panic|mce|abort", line, re.I) else "WARN"
+            findings.append((name, ln, sev, line.strip()))
 
     # sensor summary: rows / ticks from the ### headers
     sensor_path = os.path.join(ndir, "sensor.txt")

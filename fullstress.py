@@ -887,6 +887,9 @@ def build_node_script(cfg, node_tag="local", log_root=None, stamp=None):
         "set +e",
         f'LOGDIR="{logdir}"',
         'mkdir -p "$LOGDIR"',
+        # PRE: clear the kernel ring buffer so POST dmesg (dmesg -T reads the
+        # whole buffer) only contains messages produced during this run.
+        'dmesg -C 2>/dev/null || true',
         'echo "=== fullstress start $(date) on $(hostname) ==="',
         'echo "logdir: $LOGDIR"',
         # tee the whole orchestration to run.log too
