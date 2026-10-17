@@ -1,0 +1,66 @@
+========================================================================
+  Neutrino / Vera L10 — Interactive Full-Stress Menu
+  (CPU / DIMM / SSD / BF4 — local or 4-node)
+========================================================================
+
+[1] What to run (comma separated)
+    0 = ALL   (CPU + DIMM + SSD + BF4)
+    1 = CPU   (stress-ng)
+    2 = DIMM  (stressapptest)
+    3 = SSD   (fio randwrite, max load)
+    4 = BF4   (IB stress on BlueField via mst status -v)
+  choose [0]: 0
+
+[2] Duration (e.g. 3600, 30m, 2h, 8h). Used for all items.
+  duration [8h]: 8h
+
+[3] Multi-node (4 nodes: this node + 3 remote)
+    Enter all 4 node OS IPs. Press ENTER to skip a node.
+  node #1 (this node) IP: 10.35.228.146    [32m[ping OK][0m
+  node #2 IP: 10.35.228.148                [32m[ping OK][0m
+  node #3 IP: 10.35.228.150                [32m[ping OK][0m
+  node #4 IP: 10.35.228.154                [32m[ping OK][0m
+    ssh: root/password
+
+[4] SSD check (target BDF 000c:01:00*)
+    node             dev          size    mount    status
+    local            nvme0n1      3.5T    [-]      OK (non-OS)
+    10.35.228.148    nvme0n1      3.5T    [-]      OK (non-OS)
+    10.35.228.150    nvme1n1      3.5T    [-]      OK (non-OS)
+    10.35.228.154    nvme0n1      3.5T    [-]      OK (non-OS)
+  => will run fio (randwrite, max load) on /dev/nvme0n1 (000c:01:00.0)
+
+[5] BF4 IB stress (auto-detect via mst status -v)
+    local            mlx5_0(0003:01:00.0/enP3p1s0f0np0), mlx5_1(000b:01:00.0/enP11p1s0np0)
+    10.35.228.148    mlx5_0(0003:01:00.0/enP3p1s0f0np0), mlx5_1(000b:01:00.0/enP11p1s0np0)
+    10.35.228.150    mlx5_0(0003:01:00.0/enP3p1s0f0np0), mlx5_1(000b:01:00.0/enP11p1s0np0)
+    10.35.228.154    mlx5_0(0003:01:00.0/enP3p1s0f0np0), mlx5_1(000b:01:00.0/enP11p1s0np0)
+  => BF4 pair: mlx5_0(enP3p1s0f0np0) <-> mlx5_1(enP11p1s0np0)
+     server ip=10.10.10.1, client ip=10.10.10.2 (client connects to server ip)
+
+[6] DIMM
+  stressapptest will use ~80% of RAM (multi-item=80%, single=90%, keep >=16GB)
+
+------------------------------------------------------------------------
+  SUMMARY
+    items    : bf4, cpu, dimm, ssd
+    duration : 28800s   (8h)
+    nodes    : 1 local + 3 remote
+               ['10.35.228.148', '10.35.228.150', '10.35.228.154']
+    ssd      : /dev/nvme0n1  (BDF 000c:01:00.0, randwrite, max load)
+    bf4      : mlx5_0 <-> mlx5_1  (loopback, ip 10.10.10.1 / 10.10.10.2)
+    cpu      : stress-ng --cpu <all cores>
+    dimm     : stressapptest -M ~80% RAM (--cc_test)
+    logs     : ./logs/<node>/<timestamp>/  (+ power.log)
+------------------------------------------------------------------------
+  GO? [y/N]: _
+
+
+------------------------------------------------------------------------
+  (demo) same [3] with one node unreachable:
+  node #1 (this node) IP: 10.35.228.146    [32m[ping OK][0m
+  node #2 IP: 10.35.228.148                [32m[ping OK][0m
+  node #3 IP: 10.35.228.150                [31m[ping FAIL][0m
+  node #4 IP: 10.35.228.154                [32m[ping OK][0m
+  ! node 10.35.228.150 did not respond to ping — continue? [y/N]
+

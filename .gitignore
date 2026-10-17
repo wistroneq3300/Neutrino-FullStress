@@ -1,0 +1,6 @@
+*.bak
+__pycache__/
+*.pyc
+generated/
+logs/
+fullstress_logs/
