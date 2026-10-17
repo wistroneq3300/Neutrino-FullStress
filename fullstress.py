@@ -903,7 +903,7 @@ def build_node_script(cfg, node_tag="local", log_root=None, stamp=None):
     should pass /root/fullstress_logs so logs live on that node's disk.
     stamp is shared across nodes so every node writes the same run dir.
     """
-    stamp = stamp or time.strftime("%Y%m%d_%H%M%S")
+    stamp = stamp or "fullstress_" + time.strftime("%Y%m%d_%H%M")
     log_root = log_root or LOG_ROOT
     logdir = f"{log_root}/{node_tag}/{stamp}"
     lines = [
@@ -1264,9 +1264,10 @@ def main():
     os.makedirs(LOG_ROOT, exist_ok=True)
 
     # --- PRE: clear BMC SEL + Redfish EventLog/SEL (no PRE snapshot needed) - #
-    stamp = time.strftime("%Y%m%d_%H%M%S")
+    # Minute resolution: a 2-hour run cannot start twice in the same minute.
+    stamp = "fullstress_" + time.strftime("%Y%m%d_%H%M")
     run_dir = os.path.join(LOG_ROOT, "fullstress_logs", stamp)
-    ev_dir = os.path.join(LOG_ROOT, f"events_{stamp}")
+    ev_dir = os.path.join(LOG_ROOT, "events_" + stamp[len("fullstress_"):])
     print("\n[*] pre-run: clearing BMC logs (SEL + EventLog + Redfish SEL) ...")
     pre_clear = clear_all_logs(cfg["remote_ips"])
 
