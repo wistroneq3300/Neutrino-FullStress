@@ -924,44 +924,58 @@ def build_node_script(cfg, node_tag="local", log_root=None, stamp=None):
     lines.append('echo "# full ipmitool sdr snapshot every ' + str(POWER_INTERVAL) + 's (### <epoch> <iso> then one line per sensor)" > "$PWR_LOG"')
     lines.append(f'({sampler}) >> "$PWR_LOG" 2>/dev/null & PWR_PID=$!')
     lines.append('echo "  sensor sampler pid=$PWR_PID"')
+    lines.append('PIDS=""')
 
+    # All stressors run in PARALLEL (that is what "full stress" means):
+    # each is launched as a background job and we wait for every one.
     if "cpu" in cfg["items"]:
-        lines.append('echo "--- CPU stress ---"')
-        lines.append(f'({build_cpu_cmd(secs)}) 2>&1 | tee "$LOGDIR/cpu.log"')
+        lines.append('echo "--- CPU stress (background) ---"')
+        lines.append(f'({build_cpu_cmd(secs)}) > "$LOGDIR/cpu.log" 2>&1 & PIDS="$PIDS $!"')
 
     if "dimm" in cfg["items"]:
-        lines.append('echo "--- DIMM stress ---"')
-        mb, total_mb, pct = dimm_mem_mb(cfg)
-        lines.append(f'echo "  DIMM: -M {mb}MB ({pct}% of {total_mb}MB total)"')
-        cmd = build_dimm_cmd(secs, mb)
-        if cmd:
-            lines.append(f'({cmd}) 2>&1 | tee "$LOGDIR/dimm.log"')
-        else:
-            lines.append('echo "  ! stressapptest not installed; skipping DIMM" '
-                         '| tee "$LOGDIR/dimm.log"')
+        lines.append('echo "--- DIMM stress ---"' )
+        # Compute the memory budget ON THE NODE from its own MemTotal; the
+        # jumper may have far less RAM than the nodes (32GB vs 1.5TB), which
+        # silently shrank the stress to a tiny fraction of each node.
+        n_items = len(cfg["items"])
+        pct = 90 if n_items <= 1 else 80
+        lines.append('if ! command -v stressapptest >/dev/null 2>&1; then')
+        lines.append('  echo "  ! stressapptest not installed; skipping DIMM" > "$LOGDIR/dimm.log"')
+        lines.append('else')
+        lines.append('  TOTAL_MB=$(( $(awk "/^MemTotal:/{print \$2}" /proc/meminfo) / 1024 ))')
+        lines.append(f'  MB=$(( TOTAL_MB * {pct} / 100 ))')
+        lines.append('  RESERVE=16384')
+        lines.append('  [ $((TOTAL_MB - RESERVE)) -gt 0 ] && [ $MB -gt $((TOTAL_MB - RESERVE)) ] && MB=$((TOTAL_MB - RESERVE))')
+        lines.append('  [ $MB -lt 1024 ] && MB=1024')
+        lines.append('  THREADS=$(nproc)')
+        lines.append('  echo "  DIMM: -M ${MB}MB (' + str(pct) + '% of ${TOTAL_MB}MB total, ${THREADS} threads)"')
+        lines.append('  (nice -n 0 stressapptest -W -s ' + str(secs) + ' --cc_test -M $MB --pause_delay ' + str(secs * 2) + ' -m $THREADS) > "$LOGDIR/dimm.log" 2>&1 & PIDS="$PIDS $!"')
+        lines.append('fi')
 
     if "ssd" in cfg["items"]:
         lines.append('echo "--- SSD stress (fio randwrite, max load) ---"')
         drv = cfg.get("ssd_drive")
         if drv and not is_denied_bdf(cfg.get("ssd_bdf", "")):
             lines.append(f'echo "  target: {drv} ({cfg.get("ssd_bdf","")})"')
-            lines.append(build_ssd_cmd(secs, drv))
+            lines.append('(' + build_ssd_cmd(secs, drv) + ') & PIDS="$PIDS $!"')
         else:
             lines.append('echo "  ! no valid target SSD (BDF '
                          f'{SSD_BDF_ALLOW}*) — skipping SSD" '
-                         '| tee "$LOGDIR/ssd.log"')
+                         '> "$LOGDIR/ssd.log"')
 
     if "bf4" in cfg["items"]:
         lines.append('echo "--- BF4 IB stress ---"')
         if cfg.get("bf4_server") and cfg.get("bf4_client"):
-            lines.append(build_bf4_cmd(
+            lines.append('(' + build_bf4_cmd(
                 secs, cfg["bf4_server"], cfg["bf4_client"],
                 server_net=cfg.get("bf4_server_net", ""),
-                client_net=cfg.get("bf4_client_net", "")))
+                client_net=cfg.get("bf4_client_net", "")) + ') & PIDS="$PIDS $!"')
         else:
             lines.append('echo "  ! no BF4 device found — skipping BF4" '
-                         '| tee "$LOGDIR/bf4.log"')
+                         '> "$LOGDIR/bf4.log"')
 
+    lines.append('echo "--- waiting for all stressors (parallel) ---"')
+    lines.append('for p in $PIDS; do wait $p 2>/dev/null; done')
     lines.append('kill $PWR_PID 2>/dev/null; true')
     lines.append('echo "=== fullstress done $(date) ==="')
     lines.append(f'echo "logs in: {logdir}"')
@@ -1128,12 +1142,12 @@ def main():
     procs = []
     for ip in cfg["remote_ips"]:
         tag = ip.replace(".", "_")
-        # remote nodes log to /tmp/fullstress_logs on their own disk
+        # remote nodes log to /root/fullstress_logs on their own disk
         rscript = build_node_script(cfg, node_tag=tag,
                                     log_root="/root/fullstress_logs",
                                     stamp=stamp)
         print(f"[*] launching remote node {ip} ... "
-              f"(logs: /tmp/fullstress_logs/{tag} on that node)")
+              f"(logs: /root/fullstress_logs/{tag} on that node)")
         p = remote_run(ip, cfg["ssh_user"], cfg["ssh_pass"], rscript,
                        background=True)
         procs.append((ip, p))
