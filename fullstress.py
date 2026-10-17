@@ -121,6 +121,21 @@ def ping_ok(ip, count=2, timeout=1):
         return False
 
 
+def os_hostname(ip, user=DEFAULT_SSH_USER, passwd=DEFAULT_SSH_PASS, timeout=8):
+    """Return the remote OS hostname over SSH, or '' on failure. Silent."""
+    try:
+        out = subprocess.run(
+            ["sshpass", "-p", passwd, "ssh",
+             "-o", "StrictHostKeyChecking=no",
+             "-o", "UserKnownHostsFile=/dev/null",
+             "-o", f"ConnectTimeout={timeout}",
+             f"{user}@{ip}", "hostname"],
+            capture_output=True, text=True, timeout=timeout + 4)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
 def ask(prompt, default=None):
     suffix = f" [{default}]" if default is not None else ""
     val = input(f"{prompt}{suffix}: ").strip()
@@ -734,15 +749,26 @@ def collect_menu():
     print("    Enter all 4 node OS IPs. Press ENTER to skip a node.")
 
     def _ask_ip(label):
-        """Read an IP, ping it, and show a colored OK/FAIL marker."""
+        """Read an IP, then show ping + OS-hostname markers inline.
+
+        The prompt echoes on the terminal already, so we don't print the
+        label+IP again; we just append the two coloured markers.
+        """
         val = (input(f"{label}: ") or "").strip()
         if not val:
-            print(f"{label}:    {_c('[skip]', 'yellow')}")
+            print(f"         {_c('[skip]', 'yellow')}")
             return val, True
         ok = ping_ok(val)
-        mark = _c("[ping OK]", "green") if ok else _c("[ping FAIL]", "red")
-        print(f"{label}: {val}    {mark}")
-        return val, ok
+        pmark = _c("[ping OK]", "green") if ok else _c("[ping FAIL]", "red")
+        host = os_hostname(val) if ok else ""
+        if host:
+            hmark = _c(f"[hostname OK: {host}]", "green")
+        elif ok:
+            hmark = _c("[hostname FAIL]", "red")
+        else:
+            hmark = _c("[ssh skipped]", "yellow")
+        print(f"         {pmark} {hmark}")
+        return val, (ok and bool(host))
 
     cfg["local_ip"] = ""   # jumper mode: never stress the local box
     cfg["remote_ips"] = []
