@@ -194,7 +194,7 @@ def discover_nvme():
     try:
         listing = subprocess.check_output(
             ["lsblk", "-dno", "NAME,SIZE,TYPE,MOUNTPOINT"],
-            text=True, stderr=subprocess.DEVNULL).splitlines()
+            universal_newlines=True, stderr=subprocess.DEVNULL).splitlines()
     except Exception:
         return out
 
@@ -218,7 +218,7 @@ def discover_nvme():
         try:
             pmnts = subprocess.check_output(
                 ["lsblk", "-no", "MOUNTPOINT", dev],
-                text=True, stderr=subprocess.DEVNULL).split()
+                universal_newlines=True, stderr=subprocess.DEVNULL).split()
             mps = [m for m in pmnts if m]
         except Exception:
             pass
@@ -269,7 +269,7 @@ def _ssh(ip, user, passwd, cmd):
     full = ["sshpass", "-p", passwd, "ssh"] + SSH_OPTS + \
            [f"{user}@{ip}", cmd]
     try:
-        return subprocess.check_output(full, text=True,
+        return subprocess.check_output(full, universal_newlines=True,
                                        stderr=subprocess.DEVNULL, timeout=25)
     except Exception:
         return ""
@@ -292,7 +292,7 @@ def _bmc_ssh(os_ip, cmd, timeout=25):
     full = ["sshpass", "-p", BMC_PASS, "ssh"] + BMC_SSH_OPTS + \
            [f"{BMC_USER}@{bmc}", cmd]
     try:
-        return subprocess.check_output(full, text=True,
+        return subprocess.check_output(full, universal_newlines=True,
                                        stderr=subprocess.DEVNULL, timeout=timeout)
     except Exception:
         return ""
@@ -307,7 +307,7 @@ def _redfish_get(os_ip, token, path, timeout=25):
         out = subprocess.check_output(
             ["curl", "-sk", "-m", str(timeout), "-H", f"X-Auth-Token: {token}",
              f"https://{bmc}{path}"],
-            text=True, stderr=subprocess.DEVNULL)
+            universal_newlines=True, stderr=subprocess.DEVNULL)
         return out
     except Exception:
         return ""
@@ -324,7 +324,7 @@ def redfish_login(os_ip):
              "-H", "Content-Type: application/json",
              "-d", '{"UserName": "%s", "Password": "%s"}' % (BMC_USER, BMC_PASS),
              f"https://{bmc}/redfish/v1/SessionService/Sessions"],
-            text=True, stderr=subprocess.DEVNULL)
+            universal_newlines=True, stderr=subprocess.DEVNULL)
     except Exception:
         return "", ""
     token, loc = "", ""
@@ -434,7 +434,7 @@ def redfish_clear_log(os_ip, token, service):
              "-H", f"X-Auth-Token: {token}",
              "-H", "Content-Type: application/json", "-d", "{}",
              f"https://{bmc}{action}"],
-            text=True, stderr=subprocess.DEVNULL)
+            universal_newlines=True, stderr=subprocess.DEVNULL)
         return True
     except Exception:
         return False
@@ -523,7 +523,7 @@ def parse_bf4(mst_text, bf_tag="BlueField4"):
 
 def detect_bf4_local(bf_tag="BlueField4"):
     try:
-        txt = subprocess.check_output(["mst", "status", "-v"], text=True,
+        txt = subprocess.check_output(["mst", "status", "-v"], universal_newlines=True,
                                       stderr=subprocess.DEVNULL, timeout=20)
     except Exception:
         return None, []
@@ -727,17 +727,21 @@ def collect_menu():
     print("    4 = BF4   (IB stress on BlueField via mst status -v)")
     sel = ask("  choose", "0")
     picked = set()
-    for tok in sel.replace(" ", "").split(","):
-        if tok == "0":
-            picked.update({"cpu", "dimm", "ssd", "bf4"})
-        elif tok == "1":
-            picked.add("cpu")
-        elif tok == "2":
-            picked.add("dimm")
-        elif tok == "3":
-            picked.add("ssd")
-        elif tok == "4":
-            picked.add("bf4")
+    # Accept "123", "1,2,3", "1 2 3", "0" (all). Split on any non-digit so a
+    # space or comma between choices is optional.
+    digits = [c for c in sel if c.isdigit()]
+    if "0" in digits:
+        picked.update({"cpu", "dimm", "ssd", "bf4"})
+    else:
+        for tok in digits:
+            if tok == "1":
+                picked.add("cpu")
+            elif tok == "2":
+                picked.add("dimm")
+            elif tok == "3":
+                picked.add("ssd")
+            elif tok == "4":
+                picked.add("bf4")
     if not picked:
         picked = {"cpu"}
     cfg["items"] = picked
