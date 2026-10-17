@@ -84,7 +84,7 @@ border-radius:6px;padding:10px 14px;margin:10px 0;overflow-wrap:anywhere}
 .snippet{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0 0;padding:9px 11px;
 background:#f6f2ea;border:1px solid #e4dccb;border-radius:4px;color:#4a3d1a;max-height:220px;overflow:auto}
 .empty{padding:20px;background:#f1f7fa;color:var(--muted);border-radius:6px}
-.facts{display:flex;gap:22px 38px;flex-wrap:wrap;margin:20px 0 0;padding-top:18px;border-top:1px solid var(--line)}
+.outcome{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:flex-start;padding:16px 18px;border:1px solid var(--line);border-radius:8px;background:#fbfdfe;margin-bottom:18px}.outcome h2{margin:0 0 6px}.outcome-badges .label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.facts{display:flex;gap:22px 38px;flex-wrap:wrap;margin:20px 0 0;padding-top:18px;border-top:1px solid var(--line)}
 .facts dt{font-size:13px;color:var(--muted)}.facts dd{margin:3px 0 0;font-weight:600;overflow-wrap:anywhere}
 .filelink{display:inline-block;margin:3px 10px 3px 0}
 footer{color:var(--muted);font-size:13px}
@@ -321,11 +321,28 @@ def build_report(run_dir, nodes):
         f'aria-selected="{str(n==0).lower()}">{_esc(lbl)}</button>'
         for n, (k, lbl) in enumerate(tabs))
 
+    # overall verdict across all nodes
+    n_fail = sum(1 for tag, _o, _b in nodes
+                 if any(f[2] == "FAIL" for f in per_node[tag]["findings"]))
+    n_warn = sum(1 for tag, _o, _b in nodes
+                 if per_node[tag]["findings"] and
+                 not any(f[2] == "FAIL" for f in per_node[tag]["findings"]))
+    if total_findings == 0:
+        overall, overall_note = "PASS", f"all {len(nodes)} nodes clean — no FAIL/WARN lines"
+    elif n_fail:
+        overall, overall_note = "FAIL", f"{n_fail} node(s) with FAIL, {total_findings} finding(s) total"
+    else:
+        overall, overall_note = "WARN", f"{n_warn} node(s) with WARN, {total_findings} finding(s) total"
+    overall_banner = (
+        '<div class="outcome"><div><h2>Run result</h2>'
+        f'<p class="muted">{_esc(overall_note)}</p></div>'
+        f'<div class="outcome-badges"><span class="label">Overall</span>'
+        f'{_badge(overall)}</div></div>')
     overview = (
         f'<section role="tabpanel" id="overview" aria-labelledby="tab-overview">'
-        f'<div class="sheet"><h2>Run summary</h2>'
+        f'<div class="sheet"><h2>Run summary</h2>{overall_banner}'
         f'<p class="muted">All {len(nodes)} nodes. Status reflects FAIL/WARN lines scraped '
-        f'from the device logs. Sensor evidence is linked per node.</p>'
+        f'from the collected logs. Sensor/resource evidence is linked per node.</p>'
         f'{overview_table}</div>'
         f'<div class="sheet"><h2>Findings</h2>{findings_panel_body}</div>'
         f'</section>')
